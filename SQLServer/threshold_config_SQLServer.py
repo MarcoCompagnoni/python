@@ -11,7 +11,7 @@ def main():
     global connection
 
     config = configparser.ConfigParser()
-    config.read('settings.ini')
+    config.read('settings_SQLServer.ini')
     server = config.get('login', 'server')
     database = config.get('login', 'database')
     username = config.get('login', 'username')
@@ -20,6 +20,8 @@ def main():
     # CONNESSIONE ####
     connection = pypyodbc.connect('Driver={SQL Server};Server=' + server + ';Database=' +
                                   database + ';uid=' + username + ';pwd=' + password)
+
+    return
 
     select = "SELECT tipologia_controllo, impianto, apparecchiatura, strumento from VW_RAM_APP_VIBRA"
     dataset = pd.read_sql_query(select, connection)
@@ -45,7 +47,7 @@ def main():
 
                 tc = s_dataset.iloc[0].tipologia_controllo
                 risoluzione_temporale = "HOUR"
-                from_date = '2015-01-01'
+                from_date = '2016-09-01'
                 to_date = '2016-12-31'
                 delta = 0.2
 

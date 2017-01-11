@@ -4,6 +4,8 @@ import numpy as np
 import configparser
 import copy
 import time
+import cx_Oracle
+
 from datetime import datetime
 from datetime import timedelta
 from scipy import stats
@@ -19,7 +21,7 @@ def main():
 
     global connection
     config = configparser.ConfigParser()
-    config.read('settings.ini')
+    config.read('settings_SQLServer.ini')
     server = config.get('login', 'server')
     database = config.get('login', 'database')
     username = config.get('login', 'username')
@@ -51,20 +53,24 @@ def main():
 # GET DATA ####
         select_app_vibra = "SELECT tipologia_controllo, impianto, apparecchiatura, strumento, " \
             "timestamp, value, value_min, allerta, allerta_blocco FROM VW_RAM_APP_VIBRA " \
-            "WHERE timestamp > ? AND risoluzione_temporale = ? and strumento = 'M024VI1051X' ORDER BY timestamp"
+            "WHERE timestamp > ? AND risoluzione_temporale = ? AND value >= value_min ORDER BY timestamp"
 
 # TODO organizzare meglio questo blocco di codice
-        time_start = (today - timedelta(days=int(time_win)))
+        one_time_start = (today - timedelta(days=int(time_win)))
+        double_time_start = (today - timedelta(days=int(2*time_win)))
+        one_time_start_string = one_time_start.strftime("%Y-%m-%d")
+        double_time_start_string = double_time_start.strftime("%Y-%m-%d")
+
+        time_start = one_time_start
+        time_str = one_time_start_string
+
+        print("eseguo il calcolo " + tipo_calcolo + " (" + calcolo + ") dal giorno " + time_str)
 
         if tipo_calcolo == "mavg" and (calcolo == "sma" or calcolo == "wma"):
-            time_start = (today - timedelta(days=int(2*time_win)))
-        time_str = time_start.strftime("%Y-%m-%d")
-        if tipo_calcolo == "mavg" and (calcolo == "wma"):
-            time_start = (today - timedelta(days=int(time_win)))
+            time_str = double_time_start
+            if calcolo == "sma":
+                time_start = double_time_start_string
 
-        print("eseguo il calcolo " + tipo_calcolo + " (" + calcolo + ") dal giorno " + time_start.strftime("%Y-%m-%d"))
-
-# TODO mettere hour per effettuare il calcolo per ora. Per adesso non ho i dati orari
         risoluzione_temporale = "HOUR"
         values = [time_str, risoluzione_temporale]
 
@@ -72,10 +78,9 @@ def main():
 
         if tipo_calcolo == "trend":
             if calcolo == "lregr":
-                regressione_lineare(datasource, time, progressivo)
+                regressione_lineare(datasource, time_start, progressivo)
         elif tipo_calcolo == "mavg":
-            if calcolo == "sma":
-                media_mobile(datasource, time_win, calcolo, time, progressivo)
+            media_mobile(datasource, time_win, calcolo, time_start, progressivo)
 
         time_fine_operazione = time.time()
         time_elapsed_operazione = time_fine_operazione - time_inizio_operazione
@@ -118,6 +123,8 @@ def media_mobile(dataframe, time_win, tipo_media_mobile, start_time, progressivo
                                                                               == strumento])
                 if tipo_media_mobile == "sma":
 
+                    # TODO sto assumento che abbiamo TUTTI i valori orari nel periodo considerato
+
                     # window 2* time_win perchè time_win è in day mentre la granuralità del dataset è in 12h
                     dataframe_strumento['moving_average'] = dataframe_strumento['value'].rolling(window=24*time_win,
                                                                                                  center=False).mean()
@@ -128,6 +135,7 @@ def media_mobile(dataframe, time_win, tipo_media_mobile, start_time, progressivo
                     first_time = dataframe_strumento.iloc[0]['timestamp']
 
                     # TODO calcola pesi in base al delta del tempo -da scegliere-
+
                     dataframe_strumento['h_since'] = (
                         dataframe_strumento.timestamp - first_time).astype('timedelta64[h]')
 
@@ -135,7 +143,12 @@ def media_mobile(dataframe, time_win, tipo_media_mobile, start_time, progressivo
                     wma = pd.DataFrame()
                     dataframe_strumento = dataframe_strumento.reset_index(drop=True)
 
-                    index_row_time_start = dataframe_strumento[dataframe_strumento['timestamp'] > start_time].index[0]
+
+                    index_row_time_start = dataframe_strumento[dataframe_strumento['timestamp'] > start_time].index.values
+                    if len(index_row_time_start) == 0:
+                        continue
+                    else:
+                        index_row_time_start = index_row_time_start[0]
 
                     for i in range(index_row_time_start, number_of_rows):
 
@@ -161,7 +174,8 @@ def media_mobile(dataframe, time_win, tipo_media_mobile, start_time, progressivo
 
                 elif tipo_media_mobile == "ema":
 
-                    # window 2* time_win perchè time_win è in day mentre la granuralità del dataset è in 12h
+                    # TODO sto assumento che abbiamo TUTTI i valori orari nel periodo considerato
+
                     dataframe_strumento['moving_average'] = dataframe_strumento['value'].ewm(ignore_na=False,
                                                                                              adjust=True, min_periods=0,
                                                                                              span=time_win).mean()
