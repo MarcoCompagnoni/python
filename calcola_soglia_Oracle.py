@@ -4,7 +4,6 @@ import configparser
 from datetime import datetime
 
 connection = None
-a=1
 
 def main():
 
@@ -25,11 +24,18 @@ def main():
                             " from_date, to_date, delta FROM RAM_APP_VIBRA_CONF_THRESHOLD ORDER BY " \
                             "tipologia_controllo, impianto, apparecchiatura, strumento asc"
     conf_threshold = pd.read_sql_query(select_conf_threshold, connection)
-
+    select_app_vibra_soglia = "SELECT tipologia_controllo, impianto, apparecchiatura, strumento, avg(value) AS " \
+                              "media_valori FROM VW_RAM_APP_VIBRA WHERE tipologia_controllo LIKE :1 AND impianto LIKE :2 AND " \
+                              "apparecchiatura LIKE :3 AND strumento LIKE :4 AND risoluzione_temporale=:5 AND value " \
+                              ">= value_min AND timestamp BETWEEN :6 AND :7 GROUP BY tipologia_controllo, impianto," \
+                              " apparecchiatura, strumento"
     conf_threshold_number_of_rows = len(conf_threshold.index)
 
+    timestamp = datetime.now()
     for i in range(0, conf_threshold_number_of_rows):
-        timestamp = datetime.now()
+
+        print("calcolo soglia: "+str(i+1)+"/"+str(conf_threshold_number_of_rows))
+
         row = conf_threshold.iloc[i]
         tipologia_controllo = row.TIPOLOGIA_CONTROLLO
         if tipologia_controllo is None:
@@ -48,22 +54,18 @@ def main():
         to_date = row.TO_DATE
         delta = row.DELTA
 
-# CALCOLO SOGLIA ####
-        select_app_vibra_soglia = "SELECT tipologia_controllo, impianto, apparecchiatura, strumento, avg(value) AS " \
-            "media_valori FROM VW_RAM_APP_VIBRA WHERE tipologia_controllo LIKE :1 AND impianto LIKE :2 AND " \
-                                  "apparecchiatura LIKE :3 AND strumento LIKE :4 AND risoluzione_temporale=:5 AND value " \
-                                  ">= value_min AND timestamp BETWEEN :6 AND :7 GROUP BY tipologia_controllo, impianto," \
-                                  " apparecchiatura, strumento"
-
         values = [tipologia_controllo, impianto, apparecchiatura, strumento, risoluzione_temporale, from_date, to_date]
+
         connection = cx_Oracle.connect(username + "/" + password + "@" + server + "/" + service)
+
+        print("query")
         soglia_dataset = pd.read_sql_query(select_app_vibra_soglia, connection, params=values)
+        print("got data")
 
         insert_soglia_into_db(soglia_dataset, delta, timestamp)
 
 
 def insert_soglia_into_db(dataframe, delta, timestamp):
-    global a
 
     cursor = connection.cursor()
     cursor.prepare("BEGIN INSERT INTO RAM_ANACONDA_APP_THRESHOLD (tipologia_controllo, impianto, apparecchiatura, strumento, "\
@@ -91,5 +93,6 @@ def insert_soglia_into_db(dataframe, delta, timestamp):
     cursor.executemany(None, rows)
     connection.commit()
     connection.close()
+
 if __name__ == '__main__':
     main()

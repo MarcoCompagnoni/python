@@ -10,8 +10,6 @@ from datetime import datetime
 from datetime import timedelta
 from scipy import stats
 
-# TODO codice per aggiungere solo i valori di oggi
-
 connection = None
 
 def get_connection():
@@ -29,12 +27,6 @@ def get_connection():
     return connection
 
 def analytics(conf_analytics):
-    # connessione a SQLServer per performance
-    connection_sql_server = pypyodbc.connect(
-        'Driver={SQL Server};Server=localhost;Database=marco_db;uid=marco;pwd=CiaoCiao91')
-    select_app_vibra_sql_server = "SELECT tipologia_controllo, impianto, apparecchiatura, strumento, " \
-                                  "timestamp, value, value_min, allerta, allerta_blocco FROM VW_RAM_APP_VIBRA " \
-                                  "WHERE timestamp > ? AND risoluzione_temporale = ? AND value >= value_min ORDER BY timestamp"
 
     number_of_rows = len(conf_analytics.index)
     for i in range(0, number_of_rows):
@@ -54,38 +46,25 @@ def analytics(conf_analytics):
                            "timestamp, value, value_min, allerta, allerta_blocco FROM VW_RAM_APP_VIBRA " \
                            "WHERE timestamp > to_date(:1,'yyyy-mm-dd') AND risoluzione_temporale = :2 AND value >= value_min ORDER BY timestamp"
 
-        time_start_query = (today - timedelta(days=int(time_win)))
-        time_start_analytics = time_start_query
 
-        print("eseguo il calcolo " + tipo_calcolo + " (" + calcolo + ") dal giorno " + time_start_query.strftime(
+        time_start = (today - timedelta(days=time_win))
+
+        print("eseguo il calcolo " + tipo_calcolo + " (" + calcolo + ") dal giorno " + time_start.strftime(
             "%Y-%m-%d"))
 
-        if tipo_calcolo == "mavg" and (calcolo == "sma" or calcolo == "wma"):
-            time_start_query = (today - timedelta(days=int(2 * time_win)))
-            if calcolo == "sma":
-                time_start_analytics = time_start_query
-
         risoluzione_temporale = "HOUR"
-        values = [time_start_query, risoluzione_temporale]
+        values = [time_start.strftime("%Y-%m-%d"), risoluzione_temporale]
 
         print("querydb")
-        # datasource = pd.read_sql_query(select_app_vibra, connection, params=values)
-
-        # TODO sto leggendo i dati da SQLServer perchè Oracle è TROPPO lento
-        datasource = pd.read_sql_query(select_app_vibra_sql_server, connection_sql_server, params=values)
-        old = datasource.columns.values
-        new = []
-        for column in old:
-            new.append(column.upper())
-        datasource.columns = new
+        datasource = pd.read_sql_query(select_app_vibra, connection, params=values)
 
         print("got data")
 
         if tipo_calcolo == "trend":
             if calcolo == "lregr":
-                regressione_lineare(datasource, time_start_analytics, progressivo)
+                regressione_lineare(datasource, time_start, progressivo)
         elif tipo_calcolo == "mavg":
-            media_mobile(datasource, time_win, calcolo, time_start_analytics, progressivo)
+            media_mobile(datasource, time_win, calcolo, time_start, progressivo)
 
         time_fine_operazione = time.time()
         time_elapsed_operazione = time_fine_operazione - time_inizio_operazione
@@ -119,39 +98,31 @@ def main():
 def weighted_moving_average(dataframe_strumento, time_win, start_time):
     first_time = dataframe_strumento.iloc[0].TIMESTAMP
 
-    # TODO calcola pesi in base al delta del tempo -da scegliere-
+    # TODO <parametro> come calcolare pesi
 
     dataframe_strumento['h_since'] = (
         dataframe_strumento.TIMESTAMP - first_time).astype('timedelta64[h]')
 
-    number_of_rows = len(dataframe_strumento.index)
-    wma = pd.DataFrame()
     dataframe_strumento = dataframe_strumento.reset_index(drop=True)
 
-    index_row_time_start = dataframe_strumento[dataframe_strumento.TIMESTAMP > start_time].index.values
-    if len(index_row_time_start) == 0:
-        return
-    else:
-        index_row_time_start = index_row_time_start[0]
+    row = dataframe_strumento.iloc[-1]
 
-    for i in range(index_row_time_start, number_of_rows):
-        row = dataframe_strumento.iloc[i]
+    timestamp_row = row.TIMESTAMP
+    timestamp_start = timestamp_row - timedelta(days=int(time_win))
+    dataframe_wma = copy.deepcopy(dataframe_strumento)
 
-        timestamp_row = row.TIMESTAMP
-        timestamp_start = timestamp_row - timedelta(days=int(time_win))
-        dataframe_wma = copy.deepcopy(dataframe_strumento)
+    dataframe_wma = dataframe_wma[dataframe_wma.TIMESTAMP >= timestamp_start]
+    dataframe_wma = dataframe_wma[dataframe_wma.TIMESTAMP <= timestamp_row]
 
-        dataframe_wma = dataframe_wma[dataframe_wma.TIMESTAMP >= timestamp_start]
-        dataframe_wma = dataframe_wma[dataframe_wma.TIMESTAMP <= timestamp_row]
+    values = dataframe_wma.VALUE.tolist()
+    weights = dataframe_wma['h_since'].tolist()
 
-        values = dataframe_wma.VALUE.tolist()
-        weights = dataframe_wma['h_since'].tolist()
+    moving_average = np.average(values, weights=weights)
 
-        moving_average = np.average(values, weights=weights)
-
-        copy_row = copy.deepcopy(row)
-        copy_row['moving_average'] = moving_average
-        wma = wma.append(copy_row)
+    copy_row = copy.deepcopy(row)
+    copy_row['moving_average'] = moving_average
+    wma = pd.DataFrame()
+    wma = wma.append(copy_row)
     return wma
 
 def media_mobile(dataframe, time_win, tipo_media_mobile, start_time, progressivo):
@@ -175,26 +146,24 @@ def media_mobile(dataframe, time_win, tipo_media_mobile, start_time, progressivo
                                                                               == strumento])
                 if tipo_media_mobile == "sma":
 
-                    # TODO sto assumento che abbiamo TUTTI i valori orari nel periodo considerato
-                    # window 2* time_win perchè time_win è in day mentre la granuralità del dataset è in 12h
-                    dataframe_strumento['moving_average'] = dataframe_strumento.VALUE.rolling(window=24*time_win,
+                    window = len(dataframe_strumento)
+                    dataframe_strumento['moving_average'] = dataframe_strumento.VALUE.rolling(window=window,
                                                                                                  center=False).mean()
                     dataframe_strumento = dataframe_strumento[dataframe_strumento['moving_average'].notnull()]
 
                 elif tipo_media_mobile == "wma":
 
-                    wma = weighted_moving_average(dataframe_strumento, time_win, start_time)
-                    frames.append(wma)
+                    dataframe_strumento = weighted_moving_average(dataframe_strumento, time_win, start_time.date())
 
                 elif tipo_media_mobile == "ema":
 
                     # TODO sto assumento che abbiamo TUTTI i valori orari nel periodo considerato
-
+                    # (bisognerebbe sottrarre il numero di righe che hanno valore < valore_minimo)
                     dataframe_strumento['moving_average'] = dataframe_strumento.VALUE.ewm(ignore_na=False,
                                                                                              adjust=True, min_periods=0,
                                                                                              span=time_win).mean()
 
-                frames.append(dataframe_strumento)
+                frames.append(dataframe_strumento.tail(1))
 
     if len(frames) == 0:
         print("not enough values, change time_win in the config table")
@@ -208,7 +177,7 @@ def media_mobile(dataframe, time_win, tipo_media_mobile, start_time, progressivo
 def regressione_lineare(dataframe, start_time, progressivo):
 
     impianti = dataframe.IMPIANTO.unique()
-    dataframe['days_since'] = (dataframe.TIMESTAMP - start_time).astype('timedelta64[D]')
+    dataframe['days_since'] = (dataframe.TIMESTAMP - start_time.date()).astype('timedelta64[D]')
 
     frames = []
 
@@ -234,7 +203,7 @@ def regressione_lineare(dataframe, start_time, progressivo):
                 dataframe_strumento['coef'] = slope
                 dataframe_strumento['p_value'] = p_value
 
-                frames.append(dataframe_strumento)
+                frames.append(dataframe_strumento.tail(1))
 
     if len(frames) == 0:
         print("not enough values, change time_win in the config table")

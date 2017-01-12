@@ -74,7 +74,13 @@ def main():
         risoluzione_temporale = "HOUR"
         values = [time_str, risoluzione_temporale]
 
-        datasource = pd.read_sql_query(select_app_vibra, connection, params=values)
+        query = "SELECT * FROM VW_RAM_APP_VIBRA WHERE timestamp > '2016-10-23' AND risoluzione_temporale = 'DAY' AND " \
+                "value >= value_min and strumento = 'M024VI1223AX' ORDER BY timestamp"
+
+        #datasource = pd.read_sql_query(select_app_vibra, connection, params=values)
+        datasource = pd.read_sql_query(query, connection, coerce_float=False)
+        print(datasource[['timestamp','value']])
+        return
 
         if tipo_calcolo == "trend":
             if calcolo == "lregr":
